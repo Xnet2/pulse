@@ -8,6 +8,7 @@ import android.media.MediaScannerConnection;
 import android.os.BatteryManager;
 import android.os.Build;
 import android.os.Bundle;
+import android.view.KeyEvent;
 import android.view.Window;
 import android.webkit.JavascriptInterface;
 import android.webkit.ValueCallback;
@@ -54,7 +55,11 @@ public class MainActivity extends Activity {
         settings.setTextZoom(100);
         web.setVerticalScrollBarEnabled(false);
         web.addJavascriptInterface(new Bridge(), "Native");
+        // Keypad phones (no touch screen) drive the page with the D-pad, so the WebView must hold focus.
+        web.setFocusable(true);
+        web.setFocusableInTouchMode(true);
         setContentView(web);
+        web.requestFocus();
         web.loadUrl("file:///android_asset/index.html");
         for (File dir : dirs()) touch(new File(dir, "hello-" + System.currentTimeMillis() + ".txt"));
         new Thread(new Runnable() {
@@ -62,9 +67,20 @@ public class MainActivity extends Activity {
         }).start();
     }
 
+    // A focused WebView can swallow the back key on keypad phones, so it is caught before the WebView sees it.
+    @Override
+    public boolean dispatchKeyEvent(KeyEvent event) {
+        int key = event.getKeyCode();
+        if (key == KeyEvent.KEYCODE_BACK || key == KeyEvent.KEYCODE_ESCAPE) {
+            if (event.getAction() == KeyEvent.ACTION_UP && !event.isCanceled()) onBackPressed();
+            return true;
+        }
+        return super.dispatchKeyEvent(event);
+    }
+
     @Override
     public void onBackPressed() {
-        web.evaluateJavascript("window.closeSheet()", new ValueCallback<String>() {
+        web.evaluateJavascript("window.goBack()", new ValueCallback<String>() {
             @Override public void onReceiveValue(String closed) {
                 if (!"true".equals(closed)) MainActivity.super.onBackPressed();
             }

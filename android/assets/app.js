@@ -290,6 +290,7 @@
 
   function buildPost(song) {
     var post = make('article', 'post');
+    post.tabIndex = 0;
     var initial = (song.a || song.n).replace(/^[^א-תA-Za-z]+/, '').charAt(0);
     var avatar = make('div', 'avatar', initial);
     avatar.style.background = AVATAR_COLORS[hash(song.a || song.n) % AVATAR_COLORS.length];
@@ -513,6 +514,142 @@
       appendPage.timer = setTimeout(appendPage, 150);
     }
   });
+
+  /* ---------- keypad navigation (phones without a touch screen) ---------- */
+
+  var KEY = { left: 37, up: 38, right: 39, down: 40, enter: 13, center: 23, escape: 27 };
+  var returnFocus = null;
+
+  function isVisible(node) {
+    if (!node.offsetParent && node.tagName !== 'BODY') return false;
+    var r = node.getBoundingClientRect();
+    return r.width > 0 && r.height > 0;
+  }
+
+  // While a sheet is open, focus stays inside it.
+  function scope() {
+    if (settingsOpen) return el('settings');
+    if (sheetSong) return el('sheet');
+    return document;
+  }
+
+  function focusables() {
+    var nodes = scope().querySelectorAll('button, input, .post');
+    var out = [];
+    for (var i = 0; i < nodes.length; i++) if (isVisible(nodes[i])) out.push(nodes[i]);
+    return out;
+  }
+
+  function focusNode(node) {
+    if (!node) return;
+    node.focus();
+    var top = scope() === document ? el('top') : null;
+    var r = node.getBoundingClientRect();
+    var headerBottom = top ? top.getBoundingClientRect().bottom : 0;
+    if (r.top < headerBottom + 6) window.scrollBy(0, r.top - headerBottom - 10);
+    else if (r.bottom > window.innerHeight - 6) window.scrollBy(0, Math.min(r.bottom - window.innerHeight + 10, r.top - headerBottom - 10));
+    if (rendered < visible.length && node.className === 'post' && !node.nextSibling) appendPage();
+  }
+
+  function postOf(node) {
+    while (node && node !== document.body) {
+      if (node.className === 'post') return node;
+      node = node.parentNode;
+    }
+    return null;
+  }
+
+  // Posts move as whole rows: up/down jumps post to post, left/right walks the post and its buttons.
+  function move(dir) {
+    var current = document.activeElement;
+    var list = focusables();
+    if (!current || current === document.body || list.indexOf(current) < 0) {
+      focusNode(list.filter(function (n) { return n.className === 'post'; })[0] || list[0]);
+      return;
+    }
+    var post = postOf(current);
+    if (post && (dir === 'up' || dir === 'down')) {
+      var sibling = dir === 'down' ? post.nextSibling : post.previousSibling;
+      if (sibling) { focusNode(sibling); return; }
+      if (dir === 'down') return;
+    }
+    if (post && (dir === 'left' || dir === 'right')) {
+      // Reading order in Hebrew: left goes forward (post → הורדה → פרטים), right goes back.
+      var stops = [post].concat([].slice.call(post.querySelectorAll('button')));
+      var at = stops.indexOf(current) + (dir === 'left' ? 1 : -1);
+      if (at >= 0 && at < stops.length) focusNode(stops[at]);
+      return;
+    }
+    var from = current.getBoundingClientRect();
+    var cx = from.left + from.width / 2, cy = from.top + from.height / 2;
+    var best = null, bestScore = Infinity;
+    for (var i = 0; i < list.length; i++) {
+      var node = list[i];
+      if (node === current || (post && postOf(node) === post && (dir === 'up' || dir === 'down'))) continue;
+      if ((dir === 'up' || dir === 'down') && post && node.className !== 'post' && postOf(node)) continue;
+      var r = node.getBoundingClientRect();
+      var x = r.left + r.width / 2, y = r.top + r.height / 2;
+      var main = dir === 'left' ? cx - x : dir === 'right' ? x - cx : dir === 'up' ? cy - y : y - cy;
+      var side = dir === 'left' || dir === 'right' ? Math.abs(y - cy) : Math.abs(x - cx);
+      if (main <= 1) continue;
+      var score = main + side * 3;
+      if (score < bestScore) { bestScore = score; best = node; }
+    }
+    if (best) focusNode(best);
+  }
+
+  window.goBack = function () {
+    if (window.closeSheet()) {
+      if (returnFocus && document.body.contains(returnFocus)) focusNode(returnFocus);
+      returnFocus = null;
+      return true;
+    }
+    if (el('searchBox').className.indexOf('hidden') < 0) {
+      el('searchToggle').click();
+      focusNode(el('searchToggle'));
+      return true;
+    }
+    return false;
+  };
+
+  document.addEventListener('keydown', function (e) {
+    var key = e.keyCode;
+    document.body.className = 'keys';
+    var inInput = document.activeElement && document.activeElement.tagName === 'INPUT';
+    var dir = key === KEY.up ? 'up' : key === KEY.down ? 'down' : key === KEY.left ? 'left' : key === KEY.right ? 'right' : '';
+    if (dir && !(inInput && (dir === 'left' || dir === 'right'))) {
+      e.preventDefault();
+      move(dir);
+    } else if (key === KEY.escape) {
+      e.preventDefault();
+      window.goBack();
+    } else if ((key === KEY.enter || key === KEY.center) && document.activeElement && document.activeElement.className === 'post') {
+      e.preventDefault();
+      document.activeElement.click();
+    }
+  });
+
+  // Mouse or touch again: hide the focus rings.
+  document.addEventListener('mousedown', function () { document.body.className = ''; });
+  document.addEventListener('touchstart', function () { document.body.className = ''; });
+
+  // Opening a sheet from the keypad puts focus on its main button; closing it returns to where you were.
+  var openSheetPlain = openSheet;
+  openSheet = function (song) {
+    returnFocus = document.activeElement;
+    openSheetPlain(song);
+    if (document.body.className === 'keys') setTimeout(function () { el('sheetDl').focus(); }, 50);
+  };
+  el('settingsBtn').removeEventListener('click', openSettings);
+  el('settingsBtn').addEventListener('click', function () {
+    returnFocus = el('settingsBtn');
+    openSettings();
+    if (document.body.className === 'keys') setTimeout(function () { el('autoRow').focus(); }, 50);
+  });
+  el('scrim').removeEventListener('click', window.closeSheet);
+  el('scrim').addEventListener('click', window.goBack);
+  el('sheetClose').removeEventListener('click', window.closeSheet);
+  el('sheetClose').addEventListener('click', window.goBack);
 
   tick();
   setInterval(tick, 700);
